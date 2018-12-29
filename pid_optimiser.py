@@ -2,9 +2,7 @@ import random
 import numpy as np
 import torch
 import time
-import os
 import socket
-import sys
 import torch.nn.functional as F
 import torch.nn as nn
 import torch.optim as optim
@@ -46,8 +44,8 @@ def get_feedback(x_values=[]):
         data = get_data_array(data)
         ao = ao + data[0]
         at = at + data[1]
-    ao = ao/5.0
-    at = at/5.0
+    ao = ao / 5.0
+    at = at / 5.0
     print("Received State Values\n", list([ao, at]))
     return list([ao, at])
 
@@ -73,292 +71,105 @@ class Network(nn.Module):
     def forward(self, x):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
+        x = F.leaky_relu(self.fc3(x), 1)
+        # print("line 75 action", x)
         return x
 
 
-def increment(x, iteration, max_range, min_range, num_iterations):
-    x1_increments = torch.tensor(np.linspace(max_range[0] / 100, min_range[0] / 10, num_iterations), dtype=torch.float32)
-    x2_increments = torch.tensor(np.linspace(max_range[1] / 100, min_range[1] / 10, num_iterations), dtype=torch.float32)
-    x3_increments = torch.tensor(np.linspace(max_range[2] / 100, min_range[2] / 10, num_iterations), dtype=torch.float32)
-    if iteration > 50:
-        index = [torch.randint(iteration - 50, iteration, torch.Size([]), dtype=torch.int)][0]
-    else:
-        index = [torch.randint(iteration, torch.Size([]), dtype=torch.int)][0]
-
-    if iteration < 201:
-        x[0] = x[0] + x1_increments[index]  # first 200 iterations only increasing x1
-    if 201 <= iteration < 401:
-        x[1] = x[1] + x2_increments[index]
-    if 401 <= iteration < 601:
-        x[2] = x[2] + x3_increments[index]
-    if 601 <= iteration < 801:
-        x[0] = x[0] + x1_increments[index]
-        x[1] = x[1] + x2_increments[index]
-    if 801 <= iteration < 1001:
-        x[1] = x[1] + x2_increments[index]
-        x[2] = x[2] + x3_increments[index]
-    if 1001 <= iteration < 1201:
-        x[0] = x[0] + x1_increments[index]
-        x[2] = x[2] + x3_increments[index]
-    if 1201 <= iteration < 1401:
-        x[0] = x[0] + x1_increments[index]
-        x[1] = x[1] + x2_increments[index]
-        x[2] = x[2] + x3_increments[index]
-    return x
-
-
-def decrement(x, iteration, max_range, min_range, num_iterations):
-    x1_decrements = torch.tensor(np.linspace(max_range[0] / 100, min_range[0] / 10, num_iterations), dtype=torch.float32)
-    x2_decrements = torch.tensor(np.linspace(max_range[1] / 100, min_range[1] / 10, num_iterations), dtype=torch.float32)
-    x3_decrements = torch.tensor(np.linspace(max_range[2] / 100, min_range[2] / 10, num_iterations), dtype=torch.float32)
-    if iteration > 50:
-        index = [torch.randint(iteration - 50, iteration, torch.Size([]), dtype=torch.int)][0]
-    else:
-        index = [torch.randint(iteration, torch.Size([]), dtype=torch.int)][0]
-    if iteration < 201:
-        if x[0] > 0:
-            x[0] = x[0] - x1_decrements[index]  # first 200 iterations only increasing x1
-    if 201 <= iteration < 401:
-        x[1] = x[1] - x2_decrements[index]
-    if 401 <= iteration < 601:
-        x[2] = x[2] - x3_decrements[index]
-    if 601 <= iteration < 801:
-        x[0] = x[0] - x1_decrements[index]
-        x[1] = x[1] - x2_decrements[index]
-    if 801 <= iteration < 1001:
-        x[1] = x[1] - x2_decrements[index]
-        x[2] = x[2] - x3_decrements[index]
-    if 1001 <= iteration < 1201:
-        x[0] = x[0] - x1_decrements[index]
-        x[2] = x[2] - x3_decrements[index]
-    if 1201 <= iteration < 1401:
-        x[0] = x[0] - x1_decrements[index]
-        x[1] = x[1] - x2_decrements[index]
-        x[2] = x[2] - x3_decrements[index]
-    return x
-
-
 average_batch_overshoot = 0.0
+reward_zero_counter = 0
+update_flag = True
+previous_reward = 0
+prev_time = -1
+change_reward = False
+previous_time = 0.0
+termination_counter = 0
 
 
-def reward_calculator(prev_state, action, x, iteration):
+def squeeze(x):
+    if x[0] > 300.0:
+        x[0] = 300.0
+    if x[0] < 100.0:
+        x[0] = 100.0
+    if x[1] > 1.0:
+        x[1] = 1.0
+    if x[1] < 0.0:
+        x[1] = 0.0
+    if x[2] > 300.0:
+        x[2] = 300.0
+    if x[2] < 0.0:
+        x[2] = 0.0
+    return x
+
+
+def reward_calculator(action, x, iteration):
+    global average_batch_overshoot, reward_zero_counter, change_reward, update_flag, previous_reward, prev_time, \
+        previous_time, termination_counter
+    overshoot_slope = -100.0
+    settling_time_slope = 50
+    to_return = []
     terminal = False
-    ns = prev_state
-    reward = 1
-    r = 1
-    global average_batch_overshoot
-    average_batch_overshoot = average_batch_overshoot + prev_state.numpy()[0][1]
-    if iteration % 20.0 / 1.0:
+    if update_flag:
+        print("line 109 action", action)
+        x[0] = x[0] + action[0]*100
+        x[1] = x[1] + action[1]
+        x[2] = x[2] + action[2]
+        x = squeeze(x)
+    state_values = torch.tensor([get_feedback(list(x.detach().numpy()))])
+    max_overshoot = torch.tensor([state_values[0][0]])
+    settling_time = torch.tensor([state_values[0][1]])
+    new_state = torch.cat((max_overshoot, settling_time))
+    average_batch_overshoot = average_batch_overshoot + new_state[0]
+    if iteration % 5 == 0:
+        if average_batch_overshoot / 5.0 == 0.0:
+            change_reward = True
+            print("Reward function changed!")
         average_batch_overshoot = 0.0
-    if torch.eq(action, torch.tensor(np.array([0, 0, 1]))).all():
-        state_values = torch.tensor([get_feedback(list(x.numpy()))])
-        max_overshoot = torch.tensor([state_values[0][0]])
-        settling_time = torch.tensor([state_values[0][1]])
-        new_state = torch.cat((max_overshoot, settling_time))
-        print("line 150 ps", prev_state)
-        print("line 150 ns", new_state)
-        if new_state.numpy()[0] == 0.0:
-            if prev_state.numpy()[0][1] >= new_state()[1]:
-                reward = 100
-                print("Line 203")
-                # print("New state", new_state)
-                print("reward", reward)
-                # print("terminal", terminal)
-                # print("done")
-                ns, r = torch.unsqueeze(new_state, 0), reward
+    if not change_reward:
+        print("Trying to fix overshoot")
+        to_return = [(new_state[0]) * -10, new_state]
+    else:
+        if new_state[0] > 0.0:
+            print("Overshoot happened really bad")
+            to_return = [overshoot_slope * (new_state[0]), new_state]
+        else:
+            print("Trying to get the optimal value")
+            if previous_time - new_state[1] < 0.002 and change_reward is True:
+                termination_counter += 1
             else:
-                reward = -0.1
-                print("Line 210")
-                # print("New state", new_state)
-                print("reward", reward)
-                # print("terminal", terminal)
-                # print("done")
-                ns, r = torch.unsqueeze(new_state, 0), reward
-        elif prev_state.numpy()[0][0] >= new_state.numpy()[0]:
-            print("GR")
-            if (prev_state.numpy()[0][1] - new_state.numpy()[1]) < 0.0001:
-                print("TR")
-                if iteration % 20 == 0:
-                    if average_batch_overshoot/20.0 == 0.0:
-                        reward = 10
-                        terminal = True
-                        print("Line 156")
-                        # print("New state", new_state)
-                        print("reward", reward)
-                        # print("terminal", terminal)
-                        # print("done")
-                        ns, r = torch.unsqueeze(new_state, 0), reward
-                ns, r = torch.unsqueeze(new_state, 0), reward
-            elif prev_state.numpy()[0][1] <= new_state.numpy()[1]:
-                reward = -10
-                print("Line 164")
-                # print("New state", new_state)
-                print("reward", reward)
-                # print("terminal", terminal)
-                # print("done")
-                ns, r = torch.unsqueeze(new_state, 0), reward
-            elif prev_state.numpy()[0][1] > new_state.numpy()[1]:
-                reward = 1
-                print("Line 172")
-                # print("New state", new_state)
-                print("reward", reward)
-                # print("terminal", terminal)
-                # print("done")
-                ns, r = torch.unsqueeze(new_state, 0), reward
-        elif prev_state.numpy()[0][0] < new_state.numpy()[0]:
-            reward = -100
-            print("Line 180")
-            # print("New state", new_state)
-            print("reward", reward)
-            # print("terminal", terminal)
-            # print("done")
-            ns, r = torch.unsqueeze(new_state, 0), reward
-    elif torch.eq(action, torch.tensor(np.array([0, 1, 0]))).all():
-        x = increment(x=x, iteration=iteration, max_range=Network().x_max_values, min_range=Network().x_min_values,
-                      num_iterations=Network().number_of_iterations)
-        state_values = torch.tensor([get_feedback(list(x.numpy()))])
-        max_overshoot = torch.tensor([state_values[0][0]])
-        settling_time = torch.tensor([state_values[0][1]])
-        new_state = torch.cat((max_overshoot, settling_time))
-        print("line 195 ps", prev_state)
-        print("line 196 ns", new_state)
-        if new_state.numpy()[0] == 0.0:
-            if prev_state.numpy()[0][1] >= new_state()[1]:
-                reward = 100
-                print("Line 268")
-                # print("New state", new_state)
-                print("reward", reward)
-                # print("terminal", terminal)
-                # print("done")
-                ns, r = torch.unsqueeze(new_state, 0), reward
+                termination_counter = 0
+            if termination_counter == 20:
+                terminal = True
+            # to_return = [settling_time_slope * (1 / new_state[1]), new_state]
+            to_return = [settling_time_slope * (previous_time - new_state[1]), new_state]
+    if to_return[0] == 0:
+        if previous_reward == 0:
+            if prev_time < 0:
+                prev_time = new_state[1]
+            elif new_state[1] - prev_time < 0.2:
+                update_flag = True
             else:
-                reward = -0.1
-                print("Line 276")
-                # print("New state", new_state)
-                print("reward", reward)
-                # print("terminal", terminal)
-                # print("done")
-                ns, r = torch.unsqueeze(new_state, 0), reward
-        elif prev_state.numpy()[0][0] >= new_state.numpy()[0]:
-            print("GR2")
-            if (prev_state.numpy()[0][1] - new_state.numpy()[1]) < 0.0001:
-                print("TR2")
-                if iteration % 20 == 0:
-                    if average_batch_overshoot/20.0 == 0.0:
-                        reward = 10
-                        terminal = True
-                        print("Line 199")
-                        # print("New state", new_state)
-                        print("reward", reward)
-                        # print("terminal", terminal)
-                        # print("done")
-                        ns, r = torch.unsqueeze(new_state, 0), reward
-                ns, r = torch.unsqueeze(new_state, 0), reward
-            elif prev_state.numpy()[0][1] <= new_state.numpy()[1]:
-                reward = -10
-                print("Line 207")
-                # print("New state", new_state)
-                print("reward", reward)
-                # print("terminal", terminal)
-                # print("done")
-                ns, r = torch.unsqueeze(new_state, 0), reward
-            elif prev_state.numpy()[0][1] > new_state.numpy()[1]:
-                reward = 1
-                print("Line 215")
-                # print("New state", new_state)
-                print("reward", reward)
-                # print("terminal", terminal)
-                # print("done")
-                ns, r = torch.unsqueeze(new_state, 0), reward
-        elif prev_state.numpy()[0][0] < new_state.numpy()[0]:
-            reward = -100
-            print("Line 223")
-            # print("New state", new_state)
-            print("reward", reward)
-            # print("terminal", terminal)
-            # print("done")
-            ns, r = torch.unsqueeze(new_state, 0), reward
-    elif torch.eq(action, torch.tensor(np.array([1, 0, 0]))).all():
-        x = decrement(x=x, iteration=iteration, max_range=Network().x_max_values, min_range=Network().x_min_values,
-                      num_iterations=Network().number_of_iterations)
-        state_values = torch.tensor([get_feedback(list(x.numpy()))])
-        max_overshoot = torch.tensor([state_values[0][0]])
-        settling_time = torch.tensor([state_values[0][1]])
-        new_state = torch.cat((max_overshoot, settling_time))
-        print("line 240 ps", prev_state)
-        print("line 241 ns", new_state)
-        if new_state.numpy()[0] == 0.0:
-            if prev_state.numpy()[0][1] > new_state()[1]:
-                reward = 100
-                print("Line 203")
-                # print("New state", new_state)
-                print("reward", reward)
-                # print("terminal", terminal)
-                # print("done")
-                ns, r = torch.unsqueeze(new_state, 0), reward
-            else:
-                reward = -0.1
-                print("Line 210")
-                # print("New state", new_state)
-                print("reward", reward)
-                # print("terminal", terminal)
-                # print("done")
-                ns, r = torch.unsqueeze(new_state, 0), reward
-        elif prev_state.numpy()[0][0] >= new_state.numpy()[0]:
-            print("GR3")
-            if (prev_state.numpy()[0][1] - new_state.numpy()[1]) < 0.01:
-                print("TR3")
-                if iteration % 20 == 0:
-                    if average_batch_overshoot/20.0 == 0.0:
-                        reward = 10
-                        terminal = True
-                        print("Line 242")
-                        # print("New state", new_state)
-                        print("reward", reward)
-                        # print("terminal", terminal)
-                        # print("done")
-                        ns, r = torch.unsqueeze(new_state, 0), reward
-                ns, r = torch.unsqueeze(new_state, 0), reward
-            elif prev_state.numpy()[0][1] <= new_state.numpy()[1]:
-                reward = -10
-                print("Line 250")
-                # print("New state", new_state)
-                print("reward", reward)
-                # print("terminal", terminal)
-                # print("done")
-                ns, r = torch.unsqueeze(new_state, 0), reward
-            elif prev_state.numpy()[0][1] > new_state.numpy()[1]:
-                reward = 1
-                print("Line 258")
-                # print("New state", new_state)
-                print("reward", reward)
-                # print("terminal", terminal)
-                # print("done")
-                ns, r = torch.unsqueeze(new_state, 0), reward
-        elif prev_state.numpy()[0][0] < new_state.numpy()[0]:
-            reward = -100
-            print("Line 266")
-            # print("New state", new_state)
-            print("reward", reward)
-            # print("terminal", terminal)
-            # print("done")
-            ns, r = torch.unsqueeze(new_state, 0), reward
-    return ns, r, terminal
+                print("Cannot change values further. Otherwise it will stop.")
+                update_flag = False
+        else:
+            prev_time = -1
+    previous_reward = to_return[0]
+    previous_time = new_state[1]
+    print("Current reward: ", to_return[0])
+    return to_return[0], to_return[1], terminal
 
 
 def train_model():
     start = time.time()
     net = Network()
-    optimizer = optim.Adam(net.parameters(), lr=0.1)
+    optimizer = optim.Adam(net.parameters(), lr=0.01)
     criterion = nn.MSELoss()
 
     # initialize replay memory
     replay_memory = []
 
-    # initializing action to do nothing
-    # [0,0,1] means no action, [0,1,0] means increase, [1,0,0] means decrease
-    action = torch.tensor(np.array([0, 0, 1]))
+    # initializing action
+    action = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32)
 
     iteration = 1
     # initializing starting states to random values
@@ -371,7 +182,7 @@ def train_model():
     # x3 = torch.tensor([100.0])
     x3 = torch.tensor([0.0])
     x = torch.cat((x1, x2, x3))
-    state, terminal, reward = reward_calculator(state, action, x, iteration)
+    reward, state, terminal = reward_calculator(action, x, iteration)
 
     # initialize epsilon value
     epsilon = net.initial_epsilon
@@ -381,32 +192,30 @@ def train_model():
     # main infinite loop
     while iteration < net.number_of_iterations:
         # get output from the neural network
-        output = net(state)[0]
+        output = net(state)
 
         # initialize action
-        action = torch.zeros([net.num_actions], dtype=torch.int)
+        action = torch.zeros([net.num_actions], dtype=torch.float32)
 
         # epsilon greedy exploration
-        random_action = random.random() <= epsilon
+        # random_action = random.random() <= epsilon
+        random_action = False
         if random_action:
             print("Performed random action!")
 
         # choosing action
-        action_index = [torch.randint(net.num_actions, torch.Size([]), dtype=torch.int)
-                        if random_action
-                        else torch.argmax(output)][0]
-
-        action[action_index] = 1
+        if random_action:
+            action = torch.randn(net.num_actions)
+        else:
+            action = output
 
         # get next state and reward
         # next state are overshoot and time which you'll get from PID
-        # reward will be applied on x
         # print(state, action, x, iteration)
-        next_state, reward, terminal = reward_calculator(state, action, x, iteration)
+        reward, next_state, terminal = reward_calculator(action, x, iteration)
 
         # converting reward to a tensor
         reward = torch.tensor(torch.from_numpy(np.array([reward])).unsqueeze(0), dtype=torch.int)
-
         # save transition to replay memory
         replay_memory.append((state, action, reward, next_state, terminal))
 
@@ -423,37 +232,50 @@ def train_model():
         # sample random minibatch
         minibatch = random.sample(replay_memory, net.mini_batch_size)
 
-        print("terminal line 347", terminal)
+        print("terminal ", terminal)
         # unpack minibatch
-        batch_state = torch.cat(tuple(d[0] for d in minibatch))
+        batch_state = torch.cat(tuple(d[0].unsqueeze(0) for d in minibatch))
+        # print("line 217", tuple(d[1].size() for d in minibatch))
         batch_action = torch.cat(tuple(d[1].unsqueeze(0) for d in minibatch))
         batch_reward = torch.cat(tuple(d[2] for d in minibatch))
-        batch_next_state = torch.cat(tuple(d[3] for d in minibatch))
+        batch_next_state = torch.cat(tuple(d[3].unsqueeze(0) for d in minibatch))
 
         # print("batch reward", batch_reward)
         # get output for the next state
+        # print(batch_next_state)
         output_next_state = net(batch_next_state)
 
         # set next_Q to reward_iter for terminal state, otherwise to reward_iter + gamma*max(Q)
         next_q = torch.cat(tuple(batch_reward[i]
-                                 if minibatch[i][4] else batch_reward[i] + net.gamma *
-                                                         torch.tensor(torch.max(output_next_state[i]), dtype=torch.int)
+                                 if minibatch[i][4] else batch_reward[i] + torch.tensor(net.gamma *
+                                                                                        torch.sum(output_next_state),
+                                                                                        dtype=torch.int)
                                  for i in range(len(minibatch))))
-
+        # print("next q", next_q)
+        # print("index 0", torch.tensor(next_q[0], dtype=torch.float32))
+        # print("full sum", torch.sum(next_q, dtype=torch.float32))
+        # print("next_q_1", next_q)
         # extract present Q-value
-        q_value = torch.sum(net(batch_state) * torch.tensor(batch_action, dtype=torch.float32), dim=1)
+        # print("line 234", batch_action)
+        # print("net(batch_state)", net(batch_state))
+        # print("batch_action", batch_action)
+        q_value = torch.sum(net(batch_state) * batch_action).unsqueeze(0)
+        # print("q value", q_value)
 
         # Resetting gradients
         optimizer.zero_grad()
 
         # returns a new Tensor, detached from the current graph, the result will never require gradient
-        next_q = next_q.detach()
+        # next_q_ = next_q.detach()
 
         # calculate loss
-        loss = criterion(q_value, torch.tensor(next_q, dtype=torch.float32))
-
+        # print("q_value", q_value)
+        # print("next_q", torch.sum(next_q))
+        # loss = criterion(q_value, torch.tensor(next_q[0], dtype=torch.float32))
+        loss = criterion(q_value, torch.sum(next_q, dtype=torch.float32))
+        print("LOSS: ", loss)
         # do backward pass
-        loss.backward()
+        loss.backward(retain_graph=True)
         optimizer.step()
 
         # set state = next_state
@@ -462,9 +284,15 @@ def train_model():
         if iteration % 10 == 0:
             torch.save(net, "current_model.pth")
         if terminal:
+            import winsound
+            frequency = 500  # Set Frequency To 2500 Hertz
+            duration = 1000  # Set Duration To 1000 ms == 1 second
+            winsound.Beep(frequency, duration)
+            print("Training complete!")
+            print("Optimal values:\n", x)
             torch.save(net, "current_model.pth")
             return
-
+        print("iteration", iteration)
         # print("iteration:", iteration, "elapsed time:", time.time() - start, "epsilon:", epsilon, "action:",
         #             action.detach().numpy(), "reward:", reward.numpy()[0][0], "Q max:",
         #             np.max(output.detach().numpy()))
@@ -489,7 +317,7 @@ def test(net):
 
     while terminal is False:
         # get output from the neural network
-        output = net(state)[0]
+        output, _ = net(state)[0]
         action = torch.zeros([net.num_actions], dtype=torch.int)
 
         # get action
@@ -510,7 +338,7 @@ def main():
     print(net_total_params)
     train_model()
     net = torch.load('current_model.pth').eval()
-    test(net)
+    # test(net)
 
 
 if __name__ == "__main__":
