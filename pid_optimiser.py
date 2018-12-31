@@ -1,3 +1,8 @@
+'''
+Q Learning Based PID Optimizer
+Framework: PyTorch
+Author: Satrajit Chatterjee, Prabin Rath
+'''
 import random
 import numpy as np
 import torch
@@ -7,7 +12,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import torch.optim as optim
 
-
+#Decoding the recieved data
 def get_data_array(encoded):
     dat = encoded.split('#')
     vals = []
@@ -27,7 +32,7 @@ s.connect((host, port))
 message = ''
 tar = 0
 
-
+#Function to sample the overshoot and settling time for getting feedack from the motor
 def get_feedback(x_values=[]):
     global tar
     if tar == 0:
@@ -49,7 +54,7 @@ def get_feedback(x_values=[]):
     print("Received State Values\n", list([ao, at]))
     return list([ao, at])
 
-
+#Q Learning Implementation
 class Network(nn.Module):
 
     def __init__(self):
@@ -85,7 +90,7 @@ change_reward = False
 previous_time = 0.0
 termination_counter = 0
 
-
+#To prevent the network to explore the undefind K value space
 def squeeze(x):
     if x[0] > 300.0:
         x[0] = 300.0
@@ -101,7 +106,7 @@ def squeeze(x):
         x[2] = 0.0
     return x
 
-
+#Reward function for reinforcement learning
 def reward_calculator(action, x, iteration):
     global average_batch_overshoot, reward_zero_counter, change_reward, update_flag, previous_reward, prev_time, \
         previous_time, termination_counter
