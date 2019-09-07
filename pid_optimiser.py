@@ -39,7 +39,7 @@ tar = 0
 def get_feedback(x_values=[]):
     global tar
     if tar == 0:
-        tar = 90
+        tar = 60
     else:
         tar = 0
     message = str(tar) + "#" + str(x_values[0]) + "#" + str(x_values[1]) + "#" + str(x_values[2])
