@@ -3,7 +3,7 @@ Q Learning Based PID Optimizer
 Framework: PyTorch
 Author: Satrajit Chatterjee, Prabin Rath
 '''
-from comet_ml import Experiments as comex
+from comet_ml import Experiment as comex
 import random
 import numpy as np
 import torch
@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import torch.optim as optim
 
-experiment = comex(project_name="pid_optimizer", api_key="")
+experiment = comex(project_name="pid_optimizer", api_key="s1p5x7LK2xxryou4PJ2D7kwvw")
 
 #Decoding the recieved data
 def get_data_array(encoded):
@@ -43,18 +43,17 @@ def get_feedback(x_values=[]):
     else:
         tar = 0
     message = str(tar) + "#" + str(x_values[0]) + "#" + str(x_values[1]) + "#" + str(x_values[2])
-    print("target, K_p, K_i, K_d:\n", message)
+    print("X VALUES:\n", message)
     ao = 0
     at = 0
     for i in range(5):
         s.send(message.encode('utf-8'))
+        time.sleep(2)
         data = s.recv(1024).decode('utf-8')
         data = get_data_array(data)
         ao = ao + data[0]
         at = at + data[1]
-    ao = ao / 5.0
-    at = at / 5.0
-    print("Received states (overshoot and settling_time Values)\n", list([ao, at]))
+    print("Received State Values\n", list([ao, at]))
     return list([ao, at])
 
 #Q Learning Implementation
@@ -78,7 +77,22 @@ class Network(nn.Module):
     def forward(self, x):
         x = F.relu(self.fc1(x))
         x = F.leaky_relu(self.fc2(x), 1)
+        print(x[0], x[1], x[2])
+        # exit(0)
+        # if x[0] > 300.0:
+        #     x[0] = 300.0
+        # if x[0] < 100.0:
+        #     x[0] = 100.0
+        # if x[1] > 1.0:
+        #     x[1] = 1.0
+        # if x[1] < 0.0:
+        #     x[1] = 0.0
+        # if x[2] > 300.0:
+        #     x[2] = 300.0
+        # if x[2] < 0.0:
+        #     x[2] = 0.0
         return x
+        
 
 
 average_batch_overshoot = 0.0
@@ -205,8 +219,8 @@ def train_model():
         '''
         
         # get output from the neural network
-        experiment.log_metric("overshoot", state[0][0], step=iteration)
-        experiment.log_metric("settling_time", state[0][1], step=iteration)
+        experiment.log_metric("overshoot", state[0], step=iteration)
+        experiment.log_metric("settling_time", state[1], step=iteration)
         output = net(state)
 
         # initialize action
