@@ -8,6 +8,7 @@ import random
 import numpy as np
 import torch
 import time
+import math
 import socket
 import torch.nn.functional as F
 import torch.nn as nn
@@ -213,6 +214,7 @@ def train_model():
 
     # main infinite loop
     prev_loss = 0
+    end_optimal = 0
     while iteration < net.number_of_iterations:
         '''
         logging: reward, overshoot, settling time, loss
@@ -316,10 +318,12 @@ def train_model():
 
         # set state = next_state
         state = next_state
+        if state[0] == 0.0 and 1 < abs(math.log(abs(reward.item()), 10)) < 3:
+            end_optimal += 1
         iteration += 1
         if iteration % 10 == 0:
             torch.save(net, "current_model.pth")
-        if terminal:
+        if end_optimal == 50:
             import winsound
             frequency = 500  # Set Frequency To 2500 Hertz
             duration = 1000  # Set Duration To 1000 ms == 1 second
