@@ -10,14 +10,14 @@ from roboclaw import Roboclaw
 import socket
 
 host = socket.gethostname()  # get local machine name
-port = 8080  # Make sure it's within the > 1024 $$ <65535 range
+port = 1234  # Make sure it's within the > 1024 $$ <65535 range
 s = socket.socket()
 s.bind((host, port))
 s.listen(1)
 c, addr = s.accept()
 print("Connection from: " + str(addr))
 
-rc = Roboclaw("COM5",115200)
+rc = Roboclaw("COM7",115200)
 rc.Open()
 address = 0x80
 counter=1
@@ -99,15 +99,17 @@ def takeAction(params=[]):
 
 while True:
 	data = c.recv(1024)
-	if not data:
-		break
+	#if not data:
+	#	break
 	try:
 		res=takeAction(getDataArray(data))
-		time.sleep(1)
+		print res,"\n\n"
+		#time.sleep(1)
 		to_send=str(res[0])+'#'+str(res[1])
 	except:
 		to_send='50#50'
 	c.send(to_send)
 
-# print takeAction([90,20.0,0.016610932,159.69377])
 c.close()
+
+#print takeAction([90,60.0,0.016610932,159.69377])
