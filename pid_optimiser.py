@@ -3,6 +3,7 @@ Q Learning Based PID Optimizer
 Framework: PyTorch
 Author: Satrajit Chatterjee, Prabin Rath
 '''
+from comet_ml import Experiments as comex
 import random
 import numpy as np
 import torch
@@ -11,6 +12,8 @@ import socket
 import torch.nn.functional as F
 import torch.nn as nn
 import torch.optim as optim
+
+experiment = comex(project_name="pid_optimizer", api_key="")
 
 #Decoding the recieved data
 def get_data_array(encoded):
@@ -26,7 +29,7 @@ def get_data_array(encoded):
 
 
 host = socket.gethostname()  # get local machine name
-port = 8080  # Make sure it's within the > 1024 $$ <65535 range
+port = 1234  # Make sure it's within the > 1024 $$ <65535 range
 s = socket.socket()
 s.connect((host, port))
 message = ''
@@ -40,7 +43,7 @@ def get_feedback(x_values=[]):
     else:
         tar = 0
     message = str(tar) + "#" + str(x_values[0]) + "#" + str(x_values[1]) + "#" + str(x_values[2])
-    print("X VALUES:\n", message)
+    print("target, K_p, K_i, K_d:\n", message)
     ao = 0
     at = 0
     for i in range(5):
@@ -51,7 +54,7 @@ def get_feedback(x_values=[]):
         at = at + data[1]
     ao = ao / 5.0
     at = at / 5.0
-    print("Received State Values\n", list([ao, at]))
+    print("Received states (overshoot and settling_time Values)\n", list([ao, at]))
     return list([ao, at])
 
 #Q Learning Implementation
@@ -70,14 +73,11 @@ class Network(nn.Module):
         self.x_min_values = [100, 0.0001, 0.1]
 
         self.fc1 = nn.Linear(2, 8)
-        self.fc2 = nn.Linear(8, 16)
-        self.fc3 = nn.Linear(16, 3)
+        self.fc2 = nn.Linear(8, 3)
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = F.leaky_relu(self.fc3(x), 1)
-        # print("line 75 action", x)
+        x = F.leaky_relu(self.fc2(x), 1)
         return x
 
 
@@ -106,20 +106,23 @@ def squeeze(x):
         x[2] = 0.0
     return x
 
+
+global_slope = 0
 #Reward function for reinforcement learning
 def reward_calculator(action, x, iteration):
     global average_batch_overshoot, reward_zero_counter, change_reward, update_flag, previous_reward, prev_time, \
-        previous_time, termination_counter
-    overshoot_slope = -100.0
-    settling_time_slope = 50
+        previous_time, termination_counter, global_slope
+
+    overshoot_slope = -global_slope
+    settling_time_slope = global_slope
     to_return = []
     terminal = False
     if update_flag:
         print("line 109 action", action)
-        x[0] = x[0] + action[0]*100
+        x[0] = x[0] + action[0]
         x[1] = x[1] + action[1]
         x[2] = x[2] + action[2]
-        x = squeeze(x)
+        x = squeeze(x)  # TODO: cannot squeeze like this as not a learnable operation
     state_values = torch.tensor([get_feedback(list(x.detach().numpy()))])
     max_overshoot = torch.tensor([state_values[0][0]])
     settling_time = torch.tensor([state_values[0][1]])
@@ -132,7 +135,7 @@ def reward_calculator(action, x, iteration):
         average_batch_overshoot = 0.0
     if not change_reward:
         print("Trying to fix overshoot")
-        to_return = [(new_state[0]) * -10, new_state]
+        to_return = [(new_state[0]) * -global_slope, new_state]
     else:
         if new_state[0] > 0.0:
             print("Overshoot happened really bad")
@@ -195,8 +198,15 @@ def train_model():
     epsilon_decrements = np.linspace(net.initial_epsilon, net.final_epsilon, net.number_of_iterations)
 
     # main infinite loop
+    prev_loss = 0
     while iteration < net.number_of_iterations:
+        '''
+        logging: reward, overshoot, settling time, loss
+        '''
+        
         # get output from the neural network
+        experiment.log_metric("overshoot", state[0][0], step=iteration)
+        experiment.log_metric("settling_time", state[0][1], step=iteration)
         output = net(state)
 
         # initialize action
@@ -218,6 +228,7 @@ def train_model():
         # next state are overshoot and time which you'll get from PID
         # print(state, action, x, iteration)
         reward, next_state, terminal = reward_calculator(action, x, iteration)
+        experiment.log_metric("reward", reward, step=iteration)
 
         # converting reward to a tensor
         reward = torch.tensor(torch.from_numpy(np.array([reward])).unsqueeze(0), dtype=torch.int)
@@ -277,11 +288,17 @@ def train_model():
         # print("q_value", q_value)
         # print("next_q", torch.sum(next_q))
         # loss = criterion(q_value, torch.tensor(next_q[0], dtype=torch.float32))
-        loss = criterion(q_value, torch.sum(next_q, dtype=torch.float32))
+        loss = criterion(q_value, torch.sum(next_q, dtype=torch.float32)) * 10e-5
         print("LOSS: ", loss)
+        experiment.log_metric("loss", loss.item(), step=iteration)
         # do backward pass
         loss.backward(retain_graph=True)
         optimizer.step()
+
+        # setting slopes
+        global global_slope
+        global_slope = (loss.item() - prev_loss) ** 2
+        prev_loss = loss.item()
 
         # set state = next_state
         state = next_state
