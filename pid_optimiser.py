@@ -40,7 +40,7 @@ tar = 0
 def get_feedback(x_values=[]):
     global tar
     if tar == 0:
-        tar = 60
+        tar = 180
     else:
         tar = 0
     message = str(tar) + "#" + str(x_values[0]) + "#" + str(x_values[1]) + "#" + str(x_values[2])
@@ -68,7 +68,7 @@ class Network(nn.Module):
         self.initial_epsilon = 0.1
         self.number_of_iterations = 1401
         self.replay_memory_size = 10
-        self.mini_batch_size = 4
+        self.mini_batch_size = 8
         self.x_max_values = [1000, 0.1, 300]
         self.x_min_values = [100, 0.0001, 0.1]
 
@@ -185,7 +185,7 @@ def reward_calculator(action, x, iteration):
 def train_model():
     start = time.time()
     net = Network()
-    optimizer = optim.Adam(net.parameters(), lr=0.01)
+    optimizer = optim.Adam(net.parameters(), lr=0.0001)
     criterion = nn.MSELoss()
 
     # initialize replay memory
@@ -199,11 +199,11 @@ def train_model():
     initial_settling_time = torch.tensor([1000])
     initial_overshoot = torch.tensor([2000])
     state = torch.cat((initial_overshoot, initial_settling_time)).unsqueeze(0)
-    x1 = torch.tensor([600.0])
+    x1 = torch.tensor([random.uniform(0, 300)]) #when i put a 100 here at lower range the values get stuck. I need the kp to be high initially such that the overshoot is fixed by the algorithm. with out high kp the initial lowervalues gives 0 overshoot and the algorithm is not able to optimize the settling time by increasing kp
     # x2 = torch.tensor([0.01])
-    x2 = torch.tensor([0.0])
+    x2 = torch.tensor([random.uniform(0, 1)])
     # x3 = torch.tensor([100.0])
-    x3 = torch.tensor([0.0])
+    x3 = torch.tensor([random.uniform(0, 200)])
     x = torch.cat((x1, x2, x3))
     reward, state, terminal = reward_calculator(action, x, iteration)
 
@@ -318,12 +318,17 @@ def train_model():
 
         # set state = next_state
         state = next_state
-        if state[0] == 0.0 and 1 < abs(math.log(abs(reward.item()), 10)) < 3:
+        if state[0] == 0.0 and 1 < abs(math.log(abs(reward.item()+0.01), 10)) < 3:
             end_optimal += 1
+        else:
+            end_optimal-=10
+            if end_optimal<0:
+                end_optimal = 0;
         iteration += 1
         if iteration % 10 == 0:
             torch.save(net, "current_model.pth")
-        if end_optimal == 50:
+        print("end_optimal", end_optimal)
+        if end_optimal == 25:
             import winsound
             frequency = 500  # Set Frequency To 2500 Hertz
             duration = 1000  # Set Duration To 1000 ms == 1 second
